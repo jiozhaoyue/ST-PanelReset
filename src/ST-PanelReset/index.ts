@@ -5,6 +5,10 @@ type ResetOptions = {
   reset_size: boolean;
 };
 
+type PanelContentOptions = {
+  show_close_button?: boolean;
+};
+
 type PanelResetSettings = ResetOptions & {
   selected_panel_ids: string[];
   reset_on_load: boolean;
@@ -46,8 +50,25 @@ type LauncherMountTarget = {
   placement: 'append' | 'after';
 };
 
+type SillyTavernPanelPersistenceContext = {
+  powerUserSettings?: {
+    movingUIState?: Record<string, Record<string, unknown>>;
+  };
+  eventSource?: {
+    emit?: (event_name: string) => unknown;
+  };
+  eventTypes?: {
+    MOVABLE_PANELS_RESET?: string;
+  };
+  event_types?: {
+    MOVABLE_PANELS_RESET?: string;
+  };
+  saveSettingsDebounced?: () => void;
+};
+
 const ROOT_ID = 'st-panel-reset-root';
 const OVERLAY_ID = 'st-panel-reset-overlay';
+const EXTENSION_ROOT_ID = 'st-panel-reset-extension-root';
 const STYLE_ID = 'st-panel-reset-style';
 const SETTINGS_KEY = 'ST-PanelReset';
 const EVENT_NAMESPACE = '.stPanelReset';
@@ -355,6 +376,45 @@ export function getLauncherStyle(): string {
 	`;
 }
 
+export function getOverlayStyle(): string {
+  return `
+    #${OVERLAY_ID} { position: fixed; inset: 0; width: 100vw; height: 100dvh; min-height: 100dvh; z-index: 12000; display: none; align-items: center; justify-content: center; pointer-events: none; }
+    #${OVERLAY_ID}.stpr-open { display: flex; }
+    #${OVERLAY_ID} .stpr-panel { position: relative; top: auto !important; right: auto !important; bottom: auto !important; left: auto !important; transform: none !important; display: flex; flex-direction: column; width: min(620px, calc(100vw - 32px)); max-height: min(720px, calc(100vh - 48px)); margin: auto; overflow: hidden; padding: 12px; border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,.22)); border-radius: 8px; background: var(--SmartThemeBlurTintColor, rgba(20,20,20,.94)); color: var(--SmartThemeBodyColor, inherit); box-shadow: 0 18px 48px rgba(0,0,0,.42); pointer-events: auto; }
+  `;
+}
+
+export function getPanelContentStyle(): string {
+  return `
+    .stpr-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; font-weight: 700; }
+    .stpr-title-actions { display: flex; align-items: center; gap: 6px; }
+    .stpr-close { min-width: 28px; }
+    .stpr-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 10px; }
+    .stpr-list-scroll { min-height: 0; overflow: auto; padding-right: 2px; }
+    .stpr-section { margin-top: 8px; }
+    .stpr-section-title { margin: 0 0 5px; font-size: 12px; font-weight: 700; opacity: .86; }
+    .stpr-list { display: grid; gap: 4px; }
+    .stpr-item { display: grid; grid-template-columns: auto 1fr; gap: 7px; align-items: start; padding: 6px; border: 1px solid rgba(128,128,128,.28); border-radius: 6px; }
+    .stpr-item-main { min-width: 0; }
+    .stpr-item-label { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font-weight: 600; }
+    .stpr-badge { padding: 1px 5px; border-radius: 999px; border: 1px solid rgba(128,128,128,.34); font-size: 11px; opacity: .86; }
+    .stpr-meta { margin-top: 2px; font-size: 11px; opacity: .72; overflow-wrap: anywhere; }
+    .stpr-options { display: grid; gap: 5px; }
+    .stpr-option { display: flex; gap: 7px; align-items: center; }
+    .stpr-empty { padding: 8px; opacity: .72; font-size: 12px; }
+    .stpr-status { margin-top: 8px; font-size: 12px; opacity: .8; min-height: 16px; }
+  `;
+}
+
+export function getExtensionSettingsStyle(): string {
+  return `
+    #${EXTENSION_ROOT_ID} { margin-block: .5rem; }
+    #${EXTENSION_ROOT_ID} .inline-drawer-content { max-height: min(560px, 62vh); overflow: auto; }
+    #${EXTENSION_ROOT_ID} .stpr-extension-panel { display: flex; flex-direction: column; max-height: min(520px, 58vh); overflow: hidden; padding: 8px 0; }
+    #${EXTENSION_ROOT_ID} .stpr-list-scroll { max-height: min(340px, 40vh); }
+  `;
+}
+
 function injectStyle(): void {
   const tavern_document = getTavernDocument();
   removeTavernElementById(STYLE_ID);
@@ -362,26 +422,9 @@ function injectStyle(): void {
   style.id = STYLE_ID;
   style.textContent = `
 			${getLauncherStyle()}
-			#${OVERLAY_ID} { position: fixed; inset: 0; z-index: 12000; display: none; place-items: center; pointer-events: none; }
-			#${OVERLAY_ID}.stpr-open { display: grid; }
-			#${OVERLAY_ID} .stpr-panel { display: flex; flex-direction: column; width: min(620px, calc(100vw - 32px)); max-height: min(720px, calc(100vh - 48px)); overflow: hidden; padding: 12px; border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,.22)); border-radius: 8px; background: var(--SmartThemeBlurTintColor, rgba(20,20,20,.94)); color: var(--SmartThemeBodyColor, inherit); box-shadow: 0 18px 48px rgba(0,0,0,.42); pointer-events: auto; }
-			#${OVERLAY_ID} .stpr-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; font-weight: 700; }
-			#${OVERLAY_ID} .stpr-title-actions { display: flex; align-items: center; gap: 6px; }
-			#${OVERLAY_ID} .stpr-close { min-width: 28px; }
-			#${OVERLAY_ID} .stpr-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 10px; }
-			#${OVERLAY_ID} .stpr-list-scroll { min-height: 0; overflow: auto; padding-right: 2px; }
-			#${OVERLAY_ID} .stpr-section { margin-top: 8px; }
-			#${OVERLAY_ID} .stpr-section-title { margin: 0 0 5px; font-size: 12px; font-weight: 700; opacity: .86; }
-			#${OVERLAY_ID} .stpr-list { display: grid; gap: 4px; }
-			#${OVERLAY_ID} .stpr-item { display: grid; grid-template-columns: auto 1fr; gap: 7px; align-items: start; padding: 6px; border: 1px solid rgba(128,128,128,.28); border-radius: 6px; }
-			#${OVERLAY_ID} .stpr-item-main { min-width: 0; }
-			#${OVERLAY_ID} .stpr-item-label { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font-weight: 600; }
-			#${OVERLAY_ID} .stpr-badge { padding: 1px 5px; border-radius: 999px; border: 1px solid rgba(128,128,128,.34); font-size: 11px; opacity: .86; }
-			#${OVERLAY_ID} .stpr-meta { margin-top: 2px; font-size: 11px; opacity: .72; overflow-wrap: anywhere; }
-			#${OVERLAY_ID} .stpr-options { display: grid; gap: 5px; }
-			#${OVERLAY_ID} .stpr-option { display: flex; gap: 7px; align-items: center; }
-			#${OVERLAY_ID} .stpr-empty { padding: 8px; opacity: .72; font-size: 12px; }
-			#${OVERLAY_ID} .stpr-status { margin-top: 8px; font-size: 12px; opacity: .8; min-height: 16px; }
+      ${getOverlayStyle()}
+      ${getPanelContentStyle()}
+      ${getExtensionSettingsStyle()}
 		`;
   (tavern_document.head ?? tavern_document.documentElement).appendChild(style);
 }
@@ -429,19 +472,28 @@ function renderPanelList(panels: DetectedPanel[], settings: PanelResetSettings):
   ].join('');
 }
 
-export function renderPanelContent(panels: DetectedPanel[], settings: PanelResetSettings): string {
+export function renderPanelContent(
+  panels: DetectedPanel[],
+  settings: PanelResetSettings,
+  options: PanelContentOptions = {},
+): string {
   const selected_count = panels.filter(panel => settings.selected_panel_ids.includes(panel.id)).length;
+  const close_button =
+    options.show_close_button === false
+      ? ''
+      : '<button type="button" class="menu_button interactable stpr-close" data-stpr-action="close" aria-label="关闭">X</button>';
 
   return `
 		<div class="stpr-title">
 			<span>酒馆面板重置</span>
 			<span class="stpr-title-actions">
 				<button type="button" class="menu_button interactable" data-stpr-action="refresh">刷新列表</button>
-				<button type="button" class="menu_button interactable stpr-close" data-stpr-action="close" aria-label="关闭">X</button>
+        ${close_button}
 			</span>
 		</div>
 		<div class="stpr-actions">
 			<button type="button" class="menu_button interactable" data-stpr-action="reset">执行重置</button>
+      <button type="button" class="menu_button interactable" data-stpr-action="clear-persistence">清除持久化尺寸/位置</button>
 		</div>
 		<div class="stpr-options">
 			<label class="stpr-option"><input type="checkbox" data-stpr-setting="reset_position" ${settings.reset_position ? 'checked' : ''}>复原位置</label>
@@ -457,8 +509,24 @@ export function renderPanelContent(panels: DetectedPanel[], settings: PanelReset
 	`;
 }
 
-function renderPanel($panel: JQuery<HTMLElement>): void {
-  $panel.html(renderPanelContent(scanPanels(), readSettings()));
+export function renderExtensionSettingsContainer(content = ''): string {
+  return `
+    <div id="${EXTENSION_ROOT_ID}" class="stpr-extension-settings">
+      <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+          <b>酒馆面板重置</b>
+          <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+          <div class="stpr-extension-panel">${content}</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderPanel($panel: JQuery<HTMLElement>, options: PanelContentOptions = {}): void {
+  $panel.html(renderPanelContent(scanPanels(), readSettings(), options));
 }
 
 function updateSetting(setting_name: keyof Omit<PanelResetSettings, 'selected_panel_ids'>, value: boolean): void {
@@ -576,6 +644,54 @@ function resetSelectedPanels(settings = readSettings(), silent = false): number 
   return selected_panels.length;
 }
 
+function getSillyTavernContext(): SillyTavernPanelPersistenceContext | null {
+  const runtime = globalThis as Record<string, any>;
+  return runtime.SillyTavern?.getContext?.() ?? runtime.TavernHelper?.getContext?.() ?? null;
+}
+
+export function clearSelectedPanelPersistence(
+  context: SillyTavernPanelPersistenceContext | null | undefined,
+  panel_ids: string[],
+): number {
+  const moving_ui_state = context?.powerUserSettings?.movingUIState;
+  if (!moving_ui_state || typeof moving_ui_state !== 'object') {
+    return 0;
+  }
+
+  let cleared_count = 0;
+  new Set(panel_ids.filter(Boolean)).forEach(panel_id => {
+    if (Object.prototype.hasOwnProperty.call(moving_ui_state, panel_id)) {
+      delete moving_ui_state[panel_id];
+      cleared_count += 1;
+    }
+  });
+
+  if (cleared_count > 0) {
+    context?.saveSettingsDebounced?.();
+    const reset_event = context?.eventTypes?.MOVABLE_PANELS_RESET ?? context?.event_types?.MOVABLE_PANELS_RESET;
+    if (reset_event) {
+      context?.eventSource?.emit?.(reset_event);
+    }
+  }
+
+  return cleared_count;
+}
+
+function clearSelectedPanelPersistenceFromRuntime(settings = readSettings()): number {
+  const selected_panels = getSelectedDetectedPanels(settings);
+  const panel_ids = selected_panels.flatMap(panel => [panel.id, panel.element.id]).filter(Boolean);
+  const cleared_count = clearSelectedPanelPersistence(getSillyTavernContext(), panel_ids);
+
+  selected_panels.forEach(panel => {
+    resetPanel(panel.element, { reset_position: true, reset_size: true });
+    if (settings.constrain_to_viewport || settings.avoid_top_bar) {
+      constrainPanelToViewport(panel.element);
+    }
+  });
+
+  return cleared_count;
+}
+
 function constrainSelectedPanels(): void {
   const settings = readSettings();
   if (!settings.constrain_to_viewport && !settings.avoid_top_bar) {
@@ -585,40 +701,25 @@ function constrainSelectedPanels(): void {
   getSelectedDetectedPanels(settings).forEach(panel => constrainPanelToViewport(panel.element));
 }
 
-function bindUi($root: JQuery<HTMLElement>, $overlay: JQuery<HTMLElement>, $panel: JQuery<HTMLElement>): void {
-  const $launcher_button = $root
-    .filter<HTMLElement>('[data-stpr-action="toggle"]')
-    .add($root.find('[data-stpr-action="toggle"]'));
-  const $event_host = $overlay;
-  let last_toggle_at = 0;
+function bindPanelEvents(
+  $event_host: JQuery<HTMLElement>,
+  $panel: JQuery<HTMLElement>,
+  options: PanelContentOptions = {},
+): void {
+  $event_host.off(EVENT_NAMESPACE);
 
-  $root.off(EVENT_NAMESPACE);
-  $overlay.off(EVENT_NAMESPACE);
-
-  const toggleOverlay = (event: Event | JQuery.TriggeredEvent): void => {
-    event.preventDefault();
-    event.stopPropagation();
-    event.stopImmediatePropagation();
-    const now = Date.now();
-    if (now - last_toggle_at < 200) {
-      return;
-    }
-    last_toggle_at = now;
-    $overlay.toggleClass('stpr-open');
-    if ($overlay.hasClass('stpr-open')) {
-      renderPanel($panel);
-    }
-  };
-
-  $launcher_button.on(`click${EVENT_NAMESPACE}`, toggleOverlay);
-  $launcher_button[0]?.addEventListener('pointerup', toggleOverlay, { capture: true });
-  $launcher_button[0]?.addEventListener('click', toggleOverlay, { capture: true });
-  $event_host.on(`click${EVENT_NAMESPACE}`, '[data-stpr-action="refresh"]', () => renderPanel($panel));
-  $event_host.on(`click${EVENT_NAMESPACE}`, '[data-stpr-action="close"]', () => $overlay.removeClass('stpr-open'));
+  $event_host.on(`click${EVENT_NAMESPACE}`, '[data-stpr-action="refresh"]', () => renderPanel($panel, options));
   $event_host.on(`click${EVENT_NAMESPACE}`, '[data-stpr-action="reset"]', () => {
     updateSelectedPanels($panel);
     const count = resetSelectedPanels();
     $panel.find('.stpr-status').text(`已处理 ${count} 个面板。`);
+  });
+  $event_host.on(`click${EVENT_NAMESPACE}`, '[data-stpr-action="clear-persistence"]', () => {
+    updateSelectedPanels($panel);
+    const count = clearSelectedPanelPersistenceFromRuntime();
+    renderPanel($panel, options);
+    $panel.find('.stpr-status').text(`已清除 ${count} 个面板的持久化尺寸/位置。`);
+    toastr.info(`已清除 ${count} 个面板的持久化尺寸/位置`, 'ST-PanelReset');
   });
   $event_host.on(`change${EVENT_NAMESPACE}`, '[data-stpr-setting]', event => {
     const input = event.currentTarget as HTMLInputElement;
@@ -631,6 +732,36 @@ function bindUi($root: JQuery<HTMLElement>, $overlay: JQuery<HTMLElement>, $pane
     updateSelectedPanels($panel);
     constrainSelectedPanels();
   });
+}
+
+function bindUi($root: JQuery<HTMLElement>, $overlay: JQuery<HTMLElement>, $panel: JQuery<HTMLElement>): void {
+  const $launcher_button = $root
+    .filter<HTMLElement>('[data-stpr-action="toggle"]')
+    .add($root.find('[data-stpr-action="toggle"]'));
+  let last_toggle_at = 0;
+
+  $root.off(EVENT_NAMESPACE);
+
+  const toggleOverlay = (event: Event | JQuery.TriggeredEvent): void => {
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    const now = Date.now();
+    if (now - last_toggle_at < 200) {
+      return;
+    }
+    last_toggle_at = now;
+    $overlay.toggleClass('stpr-open');
+    if ($overlay.hasClass('stpr-open')) {
+      renderPanel($panel, { show_close_button: true });
+    }
+  };
+
+  $launcher_button.on(`click${EVENT_NAMESPACE}`, toggleOverlay);
+  $launcher_button[0]?.addEventListener('pointerup', toggleOverlay, { capture: true });
+  $launcher_button[0]?.addEventListener('click', toggleOverlay, { capture: true });
+  bindPanelEvents($overlay, $panel, { show_close_button: true });
+  $overlay.on(`click${EVENT_NAMESPACE}`, '[data-stpr-action="close"]', () => $overlay.removeClass('stpr-open'));
 }
 
 function bindViewportGuard(): void {
@@ -816,6 +947,23 @@ function mountLauncher(): boolean {
   return true;
 }
 
+function mountExtensionSettings(): boolean {
+  const target = getTavernDocument().querySelector<HTMLElement>('#extensions_settings2');
+  if (!target) {
+    return false;
+  }
+
+  removeTavernElementById(EXTENSION_ROOT_ID);
+  const $root = $(createTavernElement<HTMLDivElement>(renderExtensionSettingsContainer()))
+    .appendTo(target)
+    .filter<HTMLElement>(`#${EXTENSION_ROOT_ID}`);
+  const $content_panel = $root.find<HTMLElement>('.stpr-extension-panel');
+
+  renderPanel($content_panel, { show_close_button: false });
+  bindPanelEvents($root, $content_panel, { show_close_button: false });
+  return true;
+}
+
 let launcher_mount_observer: MutationObserver | null = null;
 
 function bindLauncherMountObserver(): void {
@@ -824,6 +972,9 @@ function bindLauncherMountObserver(): void {
     const existing_launcher = tavern_document.getElementById(ROOT_ID);
     if (!existing_launcher || !isElementInLauncherInputArea(existing_launcher)) {
       mountLauncher();
+    }
+    if (!tavern_document.getElementById(EXTENSION_ROOT_ID)) {
+      mountExtensionSettings();
     }
   }, 100);
 
@@ -837,6 +988,9 @@ function init(): void {
   bindLauncherMountObserver();
   if (!mountLauncher()) {
     [250, 1000, 2500, 5000].forEach(delay => window.setTimeout(mountLauncher, delay));
+  }
+  if (!mountExtensionSettings()) {
+    [250, 1000, 2500, 5000].forEach(delay => window.setTimeout(mountExtensionSettings, delay));
   }
   bindViewportGuard();
 
@@ -853,6 +1007,7 @@ function init(): void {
     launcher_mount_observer = null;
     removeTavernElementById(ROOT_ID);
     removeTavernElementById(OVERLAY_ID);
+    removeTavernElementById(EXTENSION_ROOT_ID);
     removeTavernElementById(STYLE_ID);
     $(getTavernDocument()).off(EVENT_NAMESPACE);
     $(getTavernWindow()).off(EVENT_NAMESPACE);

@@ -32,6 +32,31 @@ interface Entry {
   html?: string;
 }
 
+interface ProjectTarget {
+  entry: string;
+}
+
+interface ProjectsFile {
+  projects: Record<string, ProjectTarget>;
+}
+
+function read_projects_file() {
+  const file = path.join(import.meta.dirname, 'projects.json');
+  if (!fs.existsSync(file)) {
+    return { projects: {} } satisfies ProjectsFile;
+  }
+  return JSON.parse(fs.readFileSync(file, 'utf-8')) as ProjectsFile;
+}
+
+function get_project_entry(project_name: string) {
+  const projects = read_projects_file().projects;
+  const project = projects[project_name];
+  if (project === undefined) {
+    throw new Error(`Unknown project '${project_name}'. Available projects: ${Object.keys(projects).join(', ')}`);
+  }
+  return project.entry;
+}
+
 function parse_entry(script_file: string) {
   const html = path.join(path.dirname(script_file), 'index.html');
   if (fs.existsSync(html)) {
@@ -81,6 +106,14 @@ const config: Config = {
   port: 6621,
   entries: glob_script_files().map(parse_entry),
 };
+
+function selected_entries(env: Record<string, unknown> | undefined) {
+  const project_name = typeof env?.project === 'string' ? env.project : process.env.TAVERN_HELPER_PROJECT;
+  if (!project_name) {
+    return config.entries;
+  }
+  return [parse_entry(get_project_entry(project_name))];
+}
 
 function is_truthy(value: unknown) {
   return value === true || value === 'true' || value === '1';
@@ -577,4 +610,7 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
   });
 }
 
-export default config.entries.map(parse_configuration);
+export default (env: Record<string, unknown> | undefined, argv: any) =>
+  selected_entries(env).map(entry => parse_configuration(entry)(env, argv));
+
+

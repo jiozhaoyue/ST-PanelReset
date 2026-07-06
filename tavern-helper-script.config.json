@@ -1,7 +1,7 @@
 {
   "enabled": true,
   "dist": "dist/ST-PanelReset/index.js",
-  "outputDirectory": "release",
+  "outputDirectory": "release/ST-PanelReset",
   "fileBaseName": "酒馆助手脚本-酒馆面板回正",
   "remoteUrl": "https://testingcf.jsdelivr.net/gh/jiozhaoyue/ST-PanelReset@latest/dist/ST-PanelReset/index.js",
   "script": {

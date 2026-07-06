@@ -1,5 +1,3 @@
-/* eslint-disable import-x/no-nodejs-modules */
-
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
@@ -31,12 +29,25 @@ function requireString(value, name) {
   return value.trim();
 }
 
-function getVersion() {
-  const packageJson = readJson('package.json');
-  return requireString(packageJson.version, 'package.json.version');
+function readProjectTarget() {
+  const projectName = getArgValue('--project') ?? process.env.TAVERN_HELPER_PROJECT;
+  if (!projectName) {
+    return undefined;
+  }
+  const projectsFile = readJson('projects.json');
+  const project = projectsFile.projects?.[projectName];
+  if (!project) {
+    throw new Error(`Unknown project '${projectName}'.`);
+  }
+  return { name: projectName, ...project };
 }
 
-function getExpectedTag(version = getVersion()) {
+function getVersion(config, projectTarget) {
+  const packageJson = readJson('package.json');
+  return requireString(config.version ?? projectTarget?.version ?? packageJson.version, 'project version');
+}
+
+function getExpectedTag(version) {
   return `v${version}`;
 }
 
@@ -48,17 +59,14 @@ function getCurrentTag() {
   );
 }
 
-function checkTag() {
-  const version = getVersion();
+function checkTag(version) {
   const expectedTag = getExpectedTag(version);
   const actualTag = getCurrentTag();
   if (!actualTag) {
     throw new Error(`Release tag is required and must be ${expectedTag}.`);
   }
   if (actualTag !== expectedTag) {
-    throw new Error(
-      `Release tag ${actualTag} does not match package.json version ${version}; expected ${expectedTag}.`,
-    );
+    throw new Error(`Release tag ${actualTag} does not match package.json version ${version}; expected ${expectedTag}.`);
   }
   console.info(`Release tag ${actualTag} matches package.json version ${version}.`);
 }
@@ -67,14 +75,13 @@ function stripSourceMapComment(content) {
   return content.replace(/\r?\n?\/\/# sourceMappingURL=.*(?:\r?\n)?$/u, '');
 }
 
-function buildScriptJson(config, content, version, options = {}) {
+function buildScriptJson(config, content, version) {
   const script = config.script ?? {};
   const baseName = requireString(script.baseName ?? script.name, 'script.baseName');
-  const versionedName = options.versionedName !== false;
   return {
     type: script.type ?? 'script',
     enabled: script.enabled !== false,
-    name: versionedName ? `${baseName}v${version}` : baseName,
+    name: `${baseName}v${version}`,
     id: requireString(script.id, 'script.id'),
     content,
     info: typeof script.info === 'string' ? script.info : '',
@@ -89,29 +96,25 @@ function writeJson(file, data) {
   console.info(`Wrote ${path.relative(cwd, file)}`);
 }
 
-function removeFileIfExists(file) {
-  if (fs.existsSync(file)) {
-    fs.unlinkSync(file);
-    console.info(`Removed ${path.relative(cwd, file)}`);
-  }
-}
-
 function packageScript() {
-  const configPath = getArgValue('--config') ?? 'tavern-helper-script.config.json';
+  const projectTarget = readProjectTarget();
+  const configPath = getArgValue('--config') ?? projectTarget?.scriptConfig ?? 'tavern-helper-script.config.json';
   const config = readJson(configPath);
   if (config.enabled === false) {
     console.info(`${configPath} is disabled; no script JSON package was generated.`);
     return;
   }
 
+  const version = getVersion(config, projectTarget);
   if (process.env.GITHUB_REF_TYPE === 'tag' || process.env.RELEASE_TAG || args.includes('--tag')) {
-    checkTag();
+    checkTag(version);
   }
 
-  const version = getVersion();
   const distPath = path.resolve(cwd, requireString(config.dist, 'dist'));
   const outputDirectory = path.resolve(cwd, config.outputDirectory ?? 'release');
-  const fileBaseName = sanitizeFilePart(config.fileBaseName ?? readJson('package.json').name ?? 'tavern-helper-script');
+  const fileBaseName = sanitizeFilePart(
+    config.fileBaseName ?? projectTarget?.packageName ?? readJson('package.json').name ?? 'tavern-helper-script',
+  );
   const remoteUrl = requireString(config.remoteUrl, 'remoteUrl');
 
   if (!fs.existsSync(distPath)) {
@@ -120,19 +123,20 @@ function packageScript() {
 
   const remoteContent = `import '${remoteUrl}'`;
   const inlineContent = stripSourceMapComment(fs.readFileSync(distPath, 'utf8'));
-  const remoteJson = buildScriptJson(config, remoteContent, version, { versionedName: false });
+  const remoteJson = buildScriptJson(config, remoteContent, version);
   const inlineJson = buildScriptJson(config, inlineContent, version);
   const versionedBaseName = `${fileBaseName}-v${version}`;
-  const legacyVersionedRemotePath = path.join(outputDirectory, `${versionedBaseName}.json`);
 
-  writeJson(path.join(outputDirectory, `${fileBaseName}.json`), remoteJson);
+  writeJson(path.join(outputDirectory, `${versionedBaseName}.json`), remoteJson);
   writeJson(path.join(outputDirectory, `${versionedBaseName}.inline.json`), inlineJson);
-  removeFileIfExists(legacyVersionedRemotePath);
 }
 
 try {
+  const projectTarget = readProjectTarget();
+  const configPath = getArgValue('--config') ?? projectTarget?.scriptConfig ?? 'tavern-helper-script.config.json';
+  const config = readJson(configPath);
   if (args.includes('--check-tag')) {
-    checkTag();
+    checkTag(getVersion(config, projectTarget));
   } else {
     packageScript();
   }
