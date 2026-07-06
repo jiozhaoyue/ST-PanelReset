@@ -359,20 +359,6 @@ export function getLauncherStyle(): string {
 		#${ROOT_ID} .fa-solid {
 			pointer-events: none;
 		}
-		@media (max-width: 768px) {
-			#${ROOT_ID} {
-				display: none !important;
-				visibility: hidden !important;
-				pointer-events: none !important;
-				width: 0 !important;
-				height: 0 !important;
-				min-width: 0 !important;
-				min-height: 0 !important;
-				margin: 0 !important;
-				padding: 0 !important;
-				overflow: hidden !important;
-			}
-		}
 	`;
 }
 
@@ -389,7 +375,9 @@ export function getPanelContentStyle(): string {
     .stpr-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; font-weight: 700; }
     .stpr-title-actions { display: flex; align-items: center; gap: 6px; }
     .stpr-close { min-width: 28px; }
-    .stpr-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 10px; }
+    .stpr-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 0 10px; overflow-x: auto; }
+    .stpr-actions .menu_button,
+    .stpr-title-actions .menu_button { flex: 0 0 auto; width: auto; min-width: max-content; max-width: 100%; white-space: nowrap; writing-mode: horizontal-tb; text-orientation: mixed; }
     .stpr-list-scroll { min-height: 0; overflow: auto; padding-right: 2px; }
     .stpr-section { margin-top: 8px; }
     .stpr-section-title { margin: 0 0 5px; font-size: 12px; font-weight: 700; opacity: .86; }
@@ -630,11 +618,9 @@ function getSelectedDetectedPanels(settings = readSettings()): DetectedPanel[] {
 
 function resetSelectedPanels(settings = readSettings(), silent = false): number {
   const selected_panels = getSelectedDetectedPanels(settings);
+  clearDetectedPanelPersistence(getSillyTavernContext(), selected_panels);
   selected_panels.forEach(panel => {
     resetPanel(panel.element, settings);
-    if (settings.constrain_to_viewport || settings.avoid_top_bar) {
-      constrainPanelToViewport(panel.element);
-    }
   });
 
   if (!silent) {
@@ -677,16 +663,27 @@ export function clearSelectedPanelPersistence(
   return cleared_count;
 }
 
+type PanelPersistenceIdentity = {
+  id: string;
+  element: {
+    id: string;
+  };
+};
+
+export function clearDetectedPanelPersistence(
+  context: SillyTavernPanelPersistenceContext | null | undefined,
+  panels: PanelPersistenceIdentity[],
+): number {
+  const panel_ids = panels.flatMap(panel => [panel.id, panel.element.id]).filter(Boolean);
+  return clearSelectedPanelPersistence(context, panel_ids);
+}
+
 function clearSelectedPanelPersistenceFromRuntime(settings = readSettings()): number {
   const selected_panels = getSelectedDetectedPanels(settings);
-  const panel_ids = selected_panels.flatMap(panel => [panel.id, panel.element.id]).filter(Boolean);
-  const cleared_count = clearSelectedPanelPersistence(getSillyTavernContext(), panel_ids);
+  const cleared_count = clearDetectedPanelPersistence(getSillyTavernContext(), selected_panels);
 
   selected_panels.forEach(panel => {
     resetPanel(panel.element, { reset_position: true, reset_size: true });
-    if (settings.constrain_to_viewport || settings.avoid_top_bar) {
-      constrainPanelToViewport(panel.element);
-    }
   });
 
   return cleared_count;
