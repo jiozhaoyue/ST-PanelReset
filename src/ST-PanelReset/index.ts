@@ -10,10 +10,9 @@ type PanelContentOptions = {
 };
 
 type PanelResetSettings = ResetOptions & {
+  settings_version: number;
   selected_panel_ids: string[];
   reset_on_load: boolean;
-  constrain_to_viewport: boolean;
-  avoid_top_bar: boolean;
 };
 
 type PanelIdentity = {
@@ -32,13 +31,6 @@ type DetectedPanel = {
   header: HTMLElement;
 };
 
-type RectLike = {
-  left: number;
-  right: number;
-  top: number;
-  bottom: number;
-};
-
 type LauncherToolbarCandidate = {
   interactive_child_count: number;
   interactive_descendant_count: number;
@@ -54,15 +46,6 @@ type SillyTavernPanelPersistenceContext = {
   powerUserSettings?: {
     movingUIState?: Record<string, Record<string, unknown>>;
   };
-  eventSource?: {
-    emit?: (event_name: string) => unknown;
-  };
-  eventTypes?: {
-    MOVABLE_PANELS_RESET?: string;
-  };
-  event_types?: {
-    MOVABLE_PANELS_RESET?: string;
-  };
   saveSettingsDebounced?: () => void;
 };
 
@@ -71,6 +54,7 @@ const OVERLAY_ID = 'st-panel-reset-overlay';
 const EXTENSION_ROOT_ID = 'st-panel-reset-extension-root';
 const STYLE_ID = 'st-panel-reset-style';
 const SETTINGS_KEY = 'ST-PanelReset';
+export const CURRENT_SETTINGS_VERSION = 2;
 const EVENT_NAMESPACE = '.stPanelReset';
 const LAUNCHER_LABEL = '酒馆面板重置';
 const INPUT_AREA_SELECTOR = '#send_form, #form_sheld, #send_but_sheld, #send_buttons';
@@ -83,7 +67,7 @@ const INPUT_BUTTON_ROW_SELECTOR =
 const TOOLBAR_ITEM_SELECTOR =
   'button, .menu_button, .interactable, [role="button"], [aria-label], i[title], .fa-solid, .fa-regular, .fa-brands';
 
-const POSITION_PROPERTIES = ['inset', 'left', 'top', 'right', 'bottom', 'margin', 'transform'];
+export const RESET_POSITION_PROPERTIES = ['position', 'inset', 'left', 'top', 'right', 'bottom', 'margin', 'transform'];
 const SIZE_PROPERTIES = ['width', 'height', 'min-width', 'min-height', 'max-width', 'max-height'];
 
 export const DEFAULT_SELECTED_PANEL_IDS = new Set([
@@ -99,12 +83,11 @@ export const DEFAULT_SELECTED_PANEL_IDS = new Set([
 ]);
 
 export const DEFAULT_PANEL_RESET_SETTINGS: PanelResetSettings = {
+  settings_version: CURRENT_SETTINGS_VERSION,
   selected_panel_ids: [...DEFAULT_SELECTED_PANEL_IDS],
   reset_position: true,
   reset_size: true,
   reset_on_load: false,
-  constrain_to_viewport: true,
-  avoid_top_bar: true,
 };
 
 const KNOWN_PANEL_LABELS: Record<string, { label: string; trigger_label: string; source: PanelSource }> = {
@@ -152,6 +135,29 @@ function isBrowserScript(): boolean {
   return typeof window !== 'undefined' && typeof document !== 'undefined' && typeof $ !== 'undefined';
 }
 
+export function normalizePanelResetSettings(saved: Partial<PanelResetSettings> | null | undefined): PanelResetSettings {
+  const defaults = DEFAULT_PANEL_RESET_SETTINGS;
+  if (!saved || typeof saved !== 'object') {
+    return defaults;
+  }
+
+  const saved_panel_ids = Array.isArray(saved.selected_panel_ids)
+    ? saved.selected_panel_ids.filter((panel_id): panel_id is string => typeof panel_id === 'string')
+    : defaults.selected_panel_ids;
+  const migrated_panel_ids =
+    saved.settings_version === CURRENT_SETTINGS_VERSION
+      ? saved_panel_ids
+      : [...new Set([...saved_panel_ids, ...defaults.selected_panel_ids])];
+
+  return {
+    settings_version: CURRENT_SETTINGS_VERSION,
+    selected_panel_ids: migrated_panel_ids,
+    reset_position: typeof saved.reset_position === 'boolean' ? saved.reset_position : defaults.reset_position,
+    reset_size: typeof saved.reset_size === 'boolean' ? saved.reset_size : defaults.reset_size,
+    reset_on_load: typeof saved.reset_on_load === 'boolean' ? saved.reset_on_load : defaults.reset_on_load,
+  };
+}
+
 function getTavernWindow(): Window {
   try {
     return window.parent?.document ? window.parent : window;
@@ -178,42 +184,24 @@ function createTavernElement<T extends HTMLElement>(html: string): T {
 }
 
 function readSettings(): PanelResetSettings {
-  const defaults = DEFAULT_PANEL_RESET_SETTINGS;
-
   if (!isBrowserScript() || typeof getVariables !== 'function') {
-    return defaults;
+    return DEFAULT_PANEL_RESET_SETTINGS;
   }
 
   try {
     const variables = getVariables({ type: 'script' });
     const saved = variables[SETTINGS_KEY] as Partial<PanelResetSettings> | undefined;
-    if (!saved || typeof saved !== 'object') {
-      return defaults;
+    const settings = normalizePanelResetSettings(saved);
+    if (saved?.settings_version !== CURRENT_SETTINGS_VERSION) {
+      variables[SETTINGS_KEY] = settings;
+      if (typeof replaceVariables === 'function') {
+        replaceVariables(variables, { type: 'script' });
+      }
     }
-
-    return {
-      selected_panel_ids: Array.isArray(saved.selected_panel_ids)
-        ? saved.selected_panel_ids.filter((panel_id): panel_id is string => typeof panel_id === 'string')
-        : defaults.selected_panel_ids,
-      reset_position: typeof saved.reset_position === 'boolean' ? saved.reset_position : defaults.reset_position,
-      reset_size: typeof saved.reset_size === 'boolean' ? saved.reset_size : defaults.reset_size,
-      reset_on_load: typeof saved.reset_on_load === 'boolean' ? saved.reset_on_load : defaults.reset_on_load,
-      constrain_to_viewport:
-        typeof saved.constrain_to_viewport === 'boolean'
-          ? saved.constrain_to_viewport
-          : typeof saved.keep_in_view === 'boolean'
-            ? saved.keep_in_view
-            : defaults.constrain_to_viewport,
-      avoid_top_bar:
-        typeof saved.avoid_top_bar === 'boolean'
-          ? saved.avoid_top_bar
-          : typeof saved.keep_in_view === 'boolean'
-            ? saved.keep_in_view
-            : defaults.avoid_top_bar,
-    };
+    return settings;
   } catch (error) {
     console.warn('[ST-PanelReset] 读取设置失败, 使用默认设置', error);
-    return defaults;
+    return DEFAULT_PANEL_RESET_SETTINGS;
   }
 }
 
@@ -481,14 +469,11 @@ export function renderPanelContent(
 		</div>
 		<div class="stpr-actions">
 			<button type="button" class="menu_button interactable" data-stpr-action="reset">执行重置</button>
-      <button type="button" class="menu_button interactable" data-stpr-action="clear-persistence">清除持久化尺寸/位置</button>
 		</div>
 		<div class="stpr-options">
 			<label class="stpr-option"><input type="checkbox" data-stpr-setting="reset_position" ${settings.reset_position ? 'checked' : ''}>复原位置</label>
 			<label class="stpr-option"><input type="checkbox" data-stpr-setting="reset_size" ${settings.reset_size ? 'checked' : ''}>复原大小</label>
 			<label class="stpr-option"><input type="checkbox" data-stpr-setting="reset_on_load" ${settings.reset_on_load ? 'checked' : ''}>刷新时自动重置</label>
-			<label class="stpr-option"><input type="checkbox" data-stpr-setting="constrain_to_viewport" ${settings.constrain_to_viewport ? 'checked' : ''}>强制面板不超出屏幕</label>
-			<label class="stpr-option"><input type="checkbox" data-stpr-setting="avoid_top_bar" ${settings.avoid_top_bar ? 'checked' : ''}>不被顶栏遮挡</label>
 		</div>
 		<div class="stpr-list-scroll">
 			${renderPanelList(panels, settings)}
@@ -534,81 +519,11 @@ function updateSelectedPanels($panel: JQuery<HTMLElement>): void {
 
 function resetPanel(panel: HTMLElement, options: ResetOptions): void {
   const properties = [
-    ...(options.reset_position ? POSITION_PROPERTIES : []),
+    ...(options.reset_position ? RESET_POSITION_PROPERTIES : []),
     ...(options.reset_size ? SIZE_PROPERTIES : []),
   ];
 
   properties.forEach(property => panel.style.removeProperty(property));
-}
-
-function rectsOverlapHorizontally(lhs: RectLike, rhs: RectLike): boolean {
-  return lhs.left < rhs.right && rhs.left < lhs.right;
-}
-
-export function getTopOverlapBoundary(panel_rect: RectLike, top_bar_rects: RectLike[], fallback_top: number): number {
-  const bottom = top_bar_rects
-    .filter(rect => rect.bottom > 0 && rect.bottom < 120 && rectsOverlapHorizontally(panel_rect, rect))
-    .reduce((max_bottom, rect) => Math.max(max_bottom, rect.bottom), fallback_top);
-
-  return Math.ceil(bottom);
-}
-
-function getTopBarControlRects(): RectLike[] {
-  return Array.from(
-    getTavernDocument().querySelectorAll<HTMLElement>(
-      '#top-settings-holder .drawer-icon, #top-settings-holder .interactable, #top-settings-holder button, #top-settings-holder [role="button"]',
-    ),
-  )
-    .map(element => element.getBoundingClientRect())
-    .filter(rect => rect.width > 0 && rect.height > 0)
-    .map(rect => ({ left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }));
-}
-
-function constrainPanelToViewport(panel: HTMLElement): void {
-  if (!isPanelOpen(panel)) {
-    return;
-  }
-
-  const padding = 8;
-  const tavern_window = getTavernWindow();
-  const settings = readSettings();
-  const initial_rect = panel.getBoundingClientRect();
-  const top_bar_bottom = settings.avoid_top_bar ? getTopOverlapBoundary(initial_rect, getTopBarControlRects(), 0) : 0;
-  const viewport_top_boundary = settings.constrain_to_viewport ? padding : Number.NEGATIVE_INFINITY;
-  const top_bar_boundary = top_bar_bottom > 0 ? top_bar_bottom + padding : Number.NEGATIVE_INFINITY;
-  const top_boundary = Math.max(viewport_top_boundary, top_bar_boundary);
-  const max_width = Math.max(160, tavern_window.innerWidth - padding * 2);
-  const max_height = Math.max(120, tavern_window.innerHeight - top_boundary - padding);
-  let rect = panel.getBoundingClientRect();
-
-  if (settings.constrain_to_viewport && rect.width > max_width) {
-    panel.style.setProperty('width', `${max_width}px`);
-  }
-  if ((settings.constrain_to_viewport || settings.avoid_top_bar) && rect.height > max_height) {
-    panel.style.setProperty('height', `${max_height}px`);
-  }
-
-  rect = panel.getBoundingClientRect();
-  const left = settings.constrain_to_viewport
-    ? Math.min(Math.max(rect.left, padding), Math.max(padding, tavern_window.innerWidth - rect.width - padding))
-    : rect.left;
-  const top = settings.constrain_to_viewport
-    ? Math.min(
-        Math.max(rect.top, top_boundary),
-        Math.max(top_boundary, tavern_window.innerHeight - rect.height - padding),
-      )
-    : top_bar_bottom > 0
-      ? Math.max(rect.top, top_bar_boundary)
-      : rect.top;
-
-  if (Math.round(left) !== Math.round(rect.left) || Math.round(top) !== Math.round(rect.top)) {
-    panel.style.removeProperty('right');
-    panel.style.removeProperty('bottom');
-    panel.style.removeProperty('inset');
-    panel.style.setProperty('left', `${Math.round(left)}px`);
-    panel.style.setProperty('top', `${Math.round(top)}px`);
-    panel.style.setProperty('margin', 'unset');
-  }
 }
 
 function getSelectedDetectedPanels(settings = readSettings()): DetectedPanel[] {
@@ -645,7 +560,15 @@ export function clearSelectedPanelPersistence(
   }
 
   let cleared_count = 0;
-  new Set(panel_ids.filter(Boolean)).forEach(panel_id => {
+  const candidate_panel_ids = panel_ids.flatMap(panel_id => {
+    const normalized_panel_id = panel_id.trim();
+    if (!normalized_panel_id) {
+      return [];
+    }
+    return [normalized_panel_id, `#${normalized_panel_id}`];
+  });
+
+  new Set(candidate_panel_ids).forEach(panel_id => {
     if (Object.prototype.hasOwnProperty.call(moving_ui_state, panel_id)) {
       delete moving_ui_state[panel_id];
       cleared_count += 1;
@@ -654,10 +577,6 @@ export function clearSelectedPanelPersistence(
 
   if (cleared_count > 0) {
     context?.saveSettingsDebounced?.();
-    const reset_event = context?.eventTypes?.MOVABLE_PANELS_RESET ?? context?.event_types?.MOVABLE_PANELS_RESET;
-    if (reset_event) {
-      context?.eventSource?.emit?.(reset_event);
-    }
   }
 
   return cleared_count;
@@ -678,26 +597,6 @@ export function clearDetectedPanelPersistence(
   return clearSelectedPanelPersistence(context, panel_ids);
 }
 
-function clearSelectedPanelPersistenceFromRuntime(settings = readSettings()): number {
-  const selected_panels = getSelectedDetectedPanels(settings);
-  const cleared_count = clearDetectedPanelPersistence(getSillyTavernContext(), selected_panels);
-
-  selected_panels.forEach(panel => {
-    resetPanel(panel.element, { reset_position: true, reset_size: true });
-  });
-
-  return cleared_count;
-}
-
-function constrainSelectedPanels(): void {
-  const settings = readSettings();
-  if (!settings.constrain_to_viewport && !settings.avoid_top_bar) {
-    return;
-  }
-
-  getSelectedDetectedPanels(settings).forEach(panel => constrainPanelToViewport(panel.element));
-}
-
 function bindPanelEvents(
   $event_host: JQuery<HTMLElement>,
   $panel: JQuery<HTMLElement>,
@@ -709,25 +608,14 @@ function bindPanelEvents(
   $event_host.on(`click${EVENT_NAMESPACE}`, '[data-stpr-action="reset"]', () => {
     updateSelectedPanels($panel);
     const count = resetSelectedPanels();
-    $panel.find('.stpr-status').text(`已处理 ${count} 个面板。`);
-  });
-  $event_host.on(`click${EVENT_NAMESPACE}`, '[data-stpr-action="clear-persistence"]', () => {
-    updateSelectedPanels($panel);
-    const count = clearSelectedPanelPersistenceFromRuntime();
-    renderPanel($panel, options);
-    $panel.find('.stpr-status').text(`已清除 ${count} 个面板的持久化尺寸/位置。`);
-    toastr.info(`已清除 ${count} 个面板的持久化尺寸/位置`, 'ST-PanelReset');
+    $panel.find('.stpr-status').text(`已重置 ${count} 个面板，并清除持久化尺寸/位置。`);
   });
   $event_host.on(`change${EVENT_NAMESPACE}`, '[data-stpr-setting]', event => {
     const input = event.currentTarget as HTMLInputElement;
     updateSetting(input.dataset.stprSetting as keyof Omit<PanelResetSettings, 'selected_panel_ids'>, input.checked);
-    if (input.dataset.stprSetting === 'constrain_to_viewport' || input.dataset.stprSetting === 'avoid_top_bar') {
-      constrainSelectedPanels();
-    }
   });
   $event_host.on(`change${EVENT_NAMESPACE}`, '[data-stpr-panel-id]', () => {
     updateSelectedPanels($panel);
-    constrainSelectedPanels();
   });
 }
 
@@ -759,21 +647,6 @@ function bindUi($root: JQuery<HTMLElement>, $overlay: JQuery<HTMLElement>, $pane
   $launcher_button[0]?.addEventListener('click', toggleOverlay, { capture: true });
   bindPanelEvents($overlay, $panel, { show_close_button: true });
   $overlay.on(`click${EVENT_NAMESPACE}`, '[data-stpr-action="close"]', () => $overlay.removeClass('stpr-open'));
-}
-
-function bindViewportGuard(): void {
-  const tavern_document = getTavernDocument();
-  const tavern_window = getTavernWindow();
-
-  $(tavern_document).off(EVENT_NAMESPACE);
-  $(tavern_window).off(EVENT_NAMESPACE);
-
-  const scheduleConstrain = _.debounce(constrainSelectedPanels, 50);
-  $(tavern_document).on(
-    `mouseup${EVENT_NAMESPACE} touchend${EVENT_NAMESPACE} pointerup${EVENT_NAMESPACE}`,
-    scheduleConstrain,
-  );
-  $(tavern_window).on(`resize${EVENT_NAMESPACE}`, scheduleConstrain);
 }
 
 export function shouldUseLauncherToolbarCandidate(candidate: LauncherToolbarCandidate): boolean {
@@ -989,14 +862,10 @@ function init(): void {
   if (!mountExtensionSettings()) {
     [250, 1000, 2500, 5000].forEach(delay => window.setTimeout(mountExtensionSettings, delay));
   }
-  bindViewportGuard();
 
   const settings = readSettings();
   if (settings.reset_on_load) {
     [100, 1000, 2500].forEach(delay => window.setTimeout(() => resetSelectedPanels(readSettings(), true), delay));
-  }
-  if (settings.constrain_to_viewport || settings.avoid_top_bar) {
-    window.setTimeout(constrainSelectedPanels, 1000);
   }
 
   $(window).on(`pagehide${EVENT_NAMESPACE}`, () => {
